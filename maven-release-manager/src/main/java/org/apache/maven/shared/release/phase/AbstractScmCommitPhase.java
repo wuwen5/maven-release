@@ -20,9 +20,12 @@ package org.apache.maven.shared.release.phase;
  */
 
 import java.io.File;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.scm.ScmException;
@@ -42,6 +45,8 @@ import org.apache.maven.shared.release.scm.ReleaseScmCommandException;
 import org.apache.maven.shared.release.scm.ReleaseScmRepositoryException;
 import org.apache.maven.shared.release.scm.ScmRepositoryConfigurator;
 import org.apache.maven.shared.release.util.ReleaseUtil;
+import org.codehaus.plexus.util.SelectorUtils;
+import org.codehaus.plexus.util.StringUtils;
 
 import static java.util.Objects.requireNonNull;
 
@@ -64,6 +69,8 @@ public abstract class AbstractScmCommitPhase
      */
     protected final String descriptorCommentGetter;
 
+    private final Set<String> exclusionPatterns = new HashSet<>();
+    
     protected AbstractScmCommitPhase( ScmRepositoryConfigurator scmRepositoryConfigurator,
                                       String descriptorCommentGetter )
     {
@@ -80,6 +87,19 @@ public abstract class AbstractScmCommitPhase
 
         validateConfiguration( releaseDescriptor );
 
+        List<String> additionalExcludes = releaseDescriptor.getCheckModificationExcludes();
+
+        if ( additionalExcludes != null ) 
+        {
+            for ( String additionalExclude : additionalExcludes ) 
+            {
+                exclusionPatterns.add(
+                        additionalExclude.replace( "\\", File.separator ).replace( "/", File.separator ) );
+            }
+        }
+
+        logInfo( relResult, "  ignoring changes on: " + StringUtils.join( exclusionPatterns.toArray(), ", " ) );
+        
         runLogic( releaseDescriptor, releaseEnvironment, reactorProjects, relResult, false );
 
         relResult.setResultCode( ReleaseResult.SUCCESS );
@@ -171,9 +191,13 @@ public abstract class AbstractScmCommitPhase
         else
         {
             List<File> pomFiles = createPomFiles( releaseDescriptor, reactorProjects );
-            ScmFileSet fileSet = new ScmFileSet( new File( releaseDescriptor.getWorkingDirectory() ), pomFiles );
 
-            checkin( provider, repository, fileSet, releaseDescriptor, message );
+            if ( !pomFiles.isEmpty() ) 
+            {
+                ScmFileSet fileSet = new ScmFileSet( new File( releaseDescriptor.getWorkingDirectory() ), pomFiles );
+                checkin( provider, repository, fileSet, releaseDescriptor, message );
+            }
+
         }
     }
 
@@ -311,13 +335,24 @@ public abstract class AbstractScmCommitPhase
      * @param reactorProjects   a {@link java.util.List} object
      * @return a {@link java.util.List} object
      */
-    protected static List<File> createPomFiles( ReleaseDescriptor releaseDescriptor,
+    protected List<File> createPomFiles( ReleaseDescriptor releaseDescriptor,
                                                 List<MavenProject> reactorProjects )
     {
+        MavenProject rootProject = ReleaseUtil.getRootProject( reactorProjects );
+        URI root = rootProject.getBasedir().toURI();
+        
         List<File> pomFiles = new ArrayList<>();
         for ( MavenProject project : reactorProjects )
         {
-            pomFiles.addAll( createPomFiles( releaseDescriptor, project ) );
+            URI pom = project.getFile().toURI();
+
+            final String path = root.relativize( pom ).getPath();
+
+            if ( exclusionPatterns.stream()
+                    .noneMatch( exclusionPattern -> SelectorUtils.matchPath( exclusionPattern, path ) ) )
+            {
+                pomFiles.addAll( createPomFiles( releaseDescriptor, project ) );
+            }
         }
         return pomFiles;
     }

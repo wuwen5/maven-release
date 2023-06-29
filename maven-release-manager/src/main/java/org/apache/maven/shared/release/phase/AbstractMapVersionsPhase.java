@@ -19,8 +19,12 @@ package org.apache.maven.shared.release.phase;
  * under the License.
  */
 
+import java.io.File;
+import java.net.URI;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.apache.maven.artifact.ArtifactUtils;
 import org.apache.maven.project.MavenProject;
@@ -35,6 +39,7 @@ import org.apache.maven.shared.release.util.ReleaseUtil;
 import org.apache.maven.shared.release.versions.VersionParseException;
 import org.codehaus.plexus.components.interactivity.Prompter;
 import org.codehaus.plexus.components.interactivity.PrompterException;
+import org.codehaus.plexus.util.SelectorUtils;
 import org.codehaus.plexus.util.StringUtils;
 
 import static java.util.Objects.requireNonNull;
@@ -89,6 +94,8 @@ public abstract class AbstractMapVersionsPhase
      * Whether to convert to a snapshot or a release.
      */
     private final boolean convertToBranch;
+    
+    private final Set<String> exclusionPatterns = new HashSet<>();
 
     public AbstractMapVersionsPhase( Prompter prompter, Map<String, VersionPolicy> versionPolicies,
                                      boolean convertToSnapshot, boolean convertToBranch )
@@ -107,6 +114,17 @@ public abstract class AbstractMapVersionsPhase
     {
         ReleaseResult result = new ReleaseResult();
 
+        List<String> additionalExcludes = releaseDescriptor.getCheckModificationExcludes();
+
+        if ( additionalExcludes != null )
+        {
+            for ( String additionalExclude : additionalExcludes )
+            {
+                exclusionPatterns.add(
+                        additionalExclude.replace( "\\", File.separator ).replace( "/", File.separator ) );
+            }
+        }
+        
         MavenProject rootProject = ReleaseUtil.getRootProject( reactorProjects );
 
         if ( releaseDescriptor.isAutoVersionSubmodules() && ArtifactUtils.isSnapshot( rootProject.getVersion() ) )
@@ -178,23 +196,34 @@ public abstract class AbstractMapVersionsPhase
         }
         else
         {
+            URI root = rootProject.getBasedir().toURI();
             for ( MavenProject project : reactorProjects )
             {
                 String projectId = ArtifactUtils.versionlessKey( project.getGroupId(), project.getArtifactId() );
 
                 String nextVersion = resolveNextVersion( project, projectId, releaseDescriptor );
+                
+                URI pom = project.getFile().toURI();
 
-                if ( !convertToSnapshot )
+                final String path = root.relativize( pom ).getPath();
+                
+                if ( exclusionPatterns.stream()
+                        .noneMatch( exclusionPattern -> SelectorUtils.matchPath( exclusionPattern, path ) ) )
                 {
-                    releaseDescriptor.addReleaseVersion( projectId, nextVersion );
-                }
-                else if ( releaseDescriptor.isBranchCreation() && convertToBranch )
-                {
-                    releaseDescriptor.addReleaseVersion( projectId, nextVersion );
-                }
-                else
-                {
-                    releaseDescriptor.addDevelopmentVersion( projectId, nextVersion );
+                    logInfo( result, "Add Version " + nextVersion + ' ' + project );
+                    
+                    if ( !convertToSnapshot )
+                    {
+                        releaseDescriptor.addReleaseVersion( projectId, nextVersion );
+                    }
+                    else if ( releaseDescriptor.isBranchCreation() && convertToBranch )
+                    {
+                        releaseDescriptor.addReleaseVersion( projectId, nextVersion );
+                    }
+                    else
+                    {
+                        releaseDescriptor.addDevelopmentVersion( projectId, nextVersion );
+                    }
                 }
             }
         }

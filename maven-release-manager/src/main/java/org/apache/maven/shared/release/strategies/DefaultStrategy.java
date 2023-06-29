@@ -90,6 +90,7 @@ public class DefaultStrategy implements Strategy
                 //START SNIPPET: perform
                 "verify-completed-prepare-phases",
                 "checkout-project-from-scm",
+                "submodule-update",
                 "run-perform-goals"
                 //END SNIPPET: perform
         ) );

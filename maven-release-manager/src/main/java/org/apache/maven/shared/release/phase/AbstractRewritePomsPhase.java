@@ -26,9 +26,11 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.TimeZone;
 
 import org.apache.maven.artifact.Artifact;
@@ -62,6 +64,7 @@ import org.apache.maven.shared.release.transform.ModelETLFactory;
 import org.apache.maven.shared.release.transform.ModelETLRequest;
 import org.apache.maven.shared.release.transform.jdom2.JDomModelETLFactory;
 import org.apache.maven.shared.release.util.ReleaseUtil;
+import org.codehaus.plexus.util.SelectorUtils;
 import org.codehaus.plexus.util.StringUtils;
 
 import static java.util.Objects.requireNonNull;
@@ -93,6 +96,8 @@ public abstract class AbstractRewritePomsPhase
     private String modelETL = JDomModelETLFactory.NAME;
 
     private long startTime = -1 * 1000;
+
+    private final Set<String> exclusionPatterns = new HashSet<>();
 
     protected AbstractRewritePomsPhase( ScmRepositoryConfigurator scmRepositoryConfigurator,
                                         Map<String, ModelETLFactory> modelETLFactories,
@@ -147,6 +152,19 @@ public abstract class AbstractRewritePomsPhase
     {
         ReleaseResult result = new ReleaseResult();
 
+        List<String> additionalExcludes = releaseDescriptor.getCheckModificationExcludes();
+
+        if ( additionalExcludes != null )
+        {
+            for ( String additionalExclude : additionalExcludes )
+            {
+                exclusionPatterns.add(
+                        additionalExclude.replace( "\\", File.separator ).replace( "/", File.separator ) );
+            }
+        }
+        
+        logInfo( result, "  ignoring rewrite on: " + StringUtils.join( exclusionPatterns.toArray(), ", " ) );
+        
         transform( releaseDescriptor, releaseEnvironment, reactorProjects, false, result );
 
         result.setResultCode( ReleaseResult.SUCCESS );
@@ -206,12 +224,19 @@ public abstract class AbstractRewritePomsPhase
         for ( MavenProject project : reactorProjects )
         {
             URI pom = project.getFile().toURI();
-            logInfo( result,
-                     "Transforming " + root.relativize( pom ).getPath() + ' '
-                         + buffer().project( project.getArtifactId() ) + " '" + project.getName() + "'"
-                         + ( simulate ? " with ." + getPomSuffix() + " suffix" : "" ) + "..." );
+            
+            final String path = root.relativize( pom ).getPath();
+            
+            if ( exclusionPatterns.stream()
+                    .noneMatch( exclusionPattern -> SelectorUtils.matchPath( exclusionPattern, path ) ) )
+            {
+                logInfo( result,
+                        "Transforming " + path + ' '
+                                + buffer().project( project.getArtifactId() ) + " '" + project.getName() + "'"
+                                + ( simulate ? " with ." + getPomSuffix() + " suffix" : "" ) + "..." );
 
-            transformProject( project, releaseDescriptor, releaseEnvironment, simulate, result );
+                transformProject( project, releaseDescriptor, releaseEnvironment, simulate, result );
+            }
         }
     }
 
@@ -507,7 +532,7 @@ public abstract class AbstractRewritePomsPhase
             {
                 if ( rawVersion.equals( originalVersion ) )
                 {
-                    logInfo( result, "  Updating " + artifactId + " to " + mappedVersion );
+                    logInfo( result, "  Updating " + artifactId + " to " + mappedVersion + ",rawV:" + rawVersion );
                     coordinate.setVersion( mappedVersion );
                 }
                 else if ( rawVersion.matches( "\\$\\{.+\\}" ) )
